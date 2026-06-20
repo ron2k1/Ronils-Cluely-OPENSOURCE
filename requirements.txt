@@ -1,0 +1,8 @@
+PySide6
+pynput
+soundcard
+mss
+numpy
+faster-whisper
+nvidia-cublas-cu12
+nvidia-cudnn-cu12

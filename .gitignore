@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime artifacts
+*.log
+run.pid
+
+# Global memory-hook stowaways (not part of the tool)
+.remember/
+
+# Meeting notes, transcripts and saved answers are LOCAL-ONLY and never
+# committed. They hold other participants' words, so they must not leave your
+# machine. Keep the folder, ignore its contents.
+notes/*
+!notes/.gitkeep
+
+# Internal design/planning notes are kept local, not published.
+docs/superpowers/
