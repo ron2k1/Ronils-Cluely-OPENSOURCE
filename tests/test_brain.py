@@ -230,6 +230,33 @@ def _fenced_code(answer):
     return "\n".join(re.findall(r"```[\w+-]*\n(.*?)```", answer, re.S))
 
 
+def _read_aloud(answer):
+    """The read-aloud script as [code line, explanation] pairs. A line that isn't a new
+    `code` entry continues the previous explanation."""
+    pairs = []
+    for ln in answer.partition("Read aloud")[2].splitlines()[1:]:
+        mo = re.match(r"\s*(?:[-*]\s*)?`(.+?)`\s*[—–:-]+\s*(.+)", ln)
+        if mo:
+            pairs.append(list(mo.groups()))
+        elif pairs and ln.strip():
+            pairs[-1][1] += " " + ln.strip()
+    return pairs
+
+
+def _sentences(text):
+    return len(re.findall(r"[.!?](?=\s|$)", text))
+
+
+def check_read_aloud_parser():
+    answer = ("```python\nx = 1\n```\n\n### Read aloud (line by line):\n"
+              "`x = 1` — I set x. It starts at one.\n"
+              "- `return x` – I hand it back.\n  That's the result!\n")
+    pairs = _read_aloud(answer)
+    assert pairs == [["x = 1", "I set x. It starts at one."],
+                     ["return x", "I hand it back. That's the result!"]], pairs
+    assert [_sentences(e) for _, e in pairs] == [2, 2], "sentence count"
+
+
 def live():
     """Real API: one coding answer on the strong path, one voiced answer on the fast path."""
     t0 = time.perf_counter()
@@ -243,6 +270,11 @@ def live():
     scope = {}
     exec(compile(code, "answer", "exec"), scope)  # the code must paste and run as is
     assert scope["is_palindrome"]("A man, a plan, a canal: Panama"), "pasted code is wrong"
+    script = _read_aloud(out)
+    assert script, "no read-aloud script"
+    deep = sum(_sentences(e) >= 2 for _, e in script)
+    assert deep >= 0.8 * len(script), \
+        f"only {deep} of {len(script)} read-aloud lines get 2+ sentences"
     t0 = time.perf_counter()
     fast = brain.ask("What is 17 times 23? Reply with just the number.", fast=True)
     t_fast = time.perf_counter() - t0
@@ -256,7 +288,7 @@ CHECKS = [
     check_stop_reasons_reported, check_bad_thinking_level_rejected, check_image_and_context,
     check_history_text_only_and_bounded, check_empty_answer_raises_and_keeps_history,
     check_reset_clears_history, check_missing_key_message, check_warm_reports_problems,
-    check_default_wiring,
+    check_default_wiring, check_read_aloud_parser,
 ]
 
 

@@ -73,11 +73,12 @@ VISION_PROMPT = (
     "as plain code in a fenced code block with NO line numbers, so it pastes and runs as is, "
     "(5) a 'Read aloud (line by line):' section that walks through the code in order, "
     "covering every line, each entry starting with that code line in backticks "
-    "('`<code line>` — ...') — one short, natural spoken "
-    "sentence per line in a relaxed, conversational first-person voice (contractions, "
-    "plain words, not robotic) that I can read out verbatim. "
+    "('`<code line>` — ...') — two to three natural spoken sentences per line (what it "
+    "does, why it's needed, and for the lines that carry the core logic, how it fits the "
+    "approach or which edge case it handles) in a relaxed, conversational first-person "
+    "voice (contractions, plain words, not robotic) that I can read out verbatim. "
     "If it is not a coding problem, concisely explain what is on screen and what I should "
-    "say or do next. Keep it tight and glanceable."
+    "say or do next. Keep everything except the read-aloud script tight and glanceable."
 )
 
 
