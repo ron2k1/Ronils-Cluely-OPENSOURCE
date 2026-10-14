@@ -13,6 +13,9 @@ Versioning is informal (personal tool).
   session keeps its last 3 exchanges in memory as text for follow-ups.
 - Requires `GEMINI_API_KEY`. The `claude` CLI is no longer used.
 - Panel labels say Gemini instead of Claude.
+- Code in answers has no line numbers, so it pastes and runs as is. The numbers
+  shifted indentation from line 10 on and broke copied code. The read-aloud
+  script now quotes each code line instead of saying "Line 4".
 - `CLUELY_ANSWER_TIMEOUT` now covers typed, screen, and image questions only, and
   defaults to 300s (was 90s). At thinking `high`, a hard problem was measured
   sending nothing for 119 to 147s before its first word.

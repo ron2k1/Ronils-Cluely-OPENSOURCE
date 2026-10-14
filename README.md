@@ -159,9 +159,10 @@ the shared screen, a coding problem, a chart.
   this, solve or explain it." Images are PNG-encoded in memory with no temp
   files.
 
-Any answer with code in it ends with a "Read aloud (line by line)" section. That's
-a spoken script walking through the solution one line at a time in plain sentences
-you can read out. Image questions cost more tokens, so they stay off the
+Code comes as a plain block with no line numbers, so it pastes and runs as is. Any
+answer with code in it ends with a "Read aloud (line by line)" section. That's a
+spoken script walking through the solution one line at a time, each step starting
+with the line of code it covers. Image questions cost more tokens, so they stay off the
 auto-answer path to keep live answering fast.
 
 ## On-screen controls

@@ -7,6 +7,7 @@ so stream parsing is tested against the SDK's actual types with no network.
 --live needs GEMINI_API_KEY and spends a few tokens."""
 import base64
 import os
+import re
 import sys
 import time
 
@@ -225,13 +226,23 @@ def check_default_wiring():
     assert brain._auto._timeout_s == 30, brain._auto._timeout_s
 
 
+def _fenced_code(answer):
+    return "\n".join(re.findall(r"```[\w+-]*\n(.*?)```", answer, re.S))
+
+
 def live():
     """Real API: one coding answer on the strong path, one voiced answer on the fast path."""
     t0 = time.perf_counter()
     out = brain.ask("Write a Python function is_palindrome(s) that ignores case and "
-                    "non-alphanumerics. Code only.")
+                    "non-alphanumerics.")
     t_main = time.perf_counter() - t0
-    assert "def is_palindrome" in out, "strong path returned no function"
+    code = _fenced_code(out)
+    assert "def is_palindrome" in code, "strong path returned no function in a code block"
+    numbered = [ln for ln in code.splitlines() if re.match(r"\s*\d+[:.]?\s", ln)]
+    assert not numbered, f"code has line numbers, so it won't paste: {numbered[:2]!r}"
+    scope = {}
+    exec(compile(code, "answer", "exec"), scope)  # the code must paste and run as is
+    assert scope["is_palindrome"]("A man, a plan, a canal: Panama"), "pasted code is wrong"
     t0 = time.perf_counter()
     fast = brain.ask("What is 17 times 23? Reply with just the number.", fast=True)
     t_fast = time.perf_counter() - t0
