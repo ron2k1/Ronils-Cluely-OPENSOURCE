@@ -205,11 +205,17 @@ Those code timings are for a standard interview problem (longest substring
 without repeating characters). A hard one costs much more. On a problem with
 2e5 intervals and 2e5 queries that needs an O((n + q) log² n) answer:
 
-| Thinking | First word   | Full answer  | Thinking tokens   |
-| -------- | ------------ | ------------ | ----------------- |
-| `high`   | ~119 to 147s | ~133 to 159s | ~15,000 to 20,000 |
-| `medium` | ~18s         | ~28s         | ~2,000            |
-| `low`    | ~3s          | ~16s         | 0                 |
+| Thinking | First word   | Full answer  |
+| -------- | ------------ | ------------ |
+| `high`   | ~68 to 147s  | ~83 to 159s  |
+| `medium` | ~11 to 18s   | ~23 to 28s   |
+| `low`    | ~3s          | ~16s         |
+
+Accuracy, from three hard problems asked twice at each level and judged against
+a brute force on 150 random cases: `high` solved 6 of 6, with a median of 54s
+per answer. `medium` solved 5 of 6 in a median of 21s. Its miss was a real logic
+bug on the hardest problem. Six answers per level is a small sample, so read
+that as a lean, not a rate.
 
 Nearly all of the wait is thinking before the first word, and Gemini sends
 nothing at all while it thinks, so the panel sits on `thinking…` the whole time.
