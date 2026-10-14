@@ -125,6 +125,7 @@ class Overlay(QWidget):
     sig_vision = Signal()
     sig_image = Signal()
     sig_quit = Signal()
+    sig_status = Signal(str)             # status text from a background thread
 
     def __init__(self):
         super().__init__()
@@ -159,6 +160,7 @@ class Overlay(QWidget):
         self.sig_vision.connect(self.ask_screen)
         self.sig_image.connect(self.attach_image)
         self.sig_quit.connect(self._quit)
+        self.sig_status.connect(self._set_status)
         self.input.installEventFilter(self)
 
     # ---------- construction ----------

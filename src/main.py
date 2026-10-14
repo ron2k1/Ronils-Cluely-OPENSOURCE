@@ -1,4 +1,4 @@
-"""Cluely entry point: launches the overlay, warms the Claude session, and
+"""Cluely entry point: launches the overlay, warms the Gemini client, and
 registers global hotkeys."""
 import sys
 import threading
@@ -19,9 +19,14 @@ def main():
     overlay = Overlay()
     overlay.show()
 
-    # Warm the persistent Claude session in the background so the SessionStart
-    # hooks (~7s, once) finish before the first real question is asked.
-    threading.Thread(target=brain.warm, daemon=True).start()
+    # Check the Gemini key and model names in the background, so a missing or
+    # bad key shows on the status line at launch, not on the first question.
+    def warm():
+        problem = brain.warm()
+        if problem:
+            overlay.sig_status.emit(problem)
+
+    threading.Thread(target=warm, daemon=True).start()
 
     # pynput runs hotkeys on its own thread; the lambdas only emit Qt signals,
     # which Qt delivers safely onto the UI thread.
@@ -41,7 +46,6 @@ def main():
         rc = app.exec()
     finally:
         hotkeys.stop()
-        brain.shutdown()
     sys.exit(rc)
 
 
