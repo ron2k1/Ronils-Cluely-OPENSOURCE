@@ -33,7 +33,32 @@ def main():
     assert ov.btn_live.text() == "⏻ OFF", "back to idle label"
     assert ov.btn_live.property("on") is False, "back to idle property"
 
+    check_answer_rendering(ov)
     print("OK")
+
+
+def check_answer_rendering(ov):
+    """A real answer through _render_chat: headings render, math is plain, and each
+    read-aloud code line is colored with a gap above it; fenced code is left alone."""
+    ov._convo = [("you", "solve it"), ("ai", (
+        "### Problem (say this first):\nPlace $n$ queens.\n\n```python\nres = []\n```\n\n"
+        "### Read aloud (line by line):\n`res = []` — I start an empty list. It holds boards."))]
+    ov._render_chat()
+    doc = ov.chat.document()
+    assert "###" not in doc.toPlainText() and "$" not in doc.toPlainText(), doc.toPlainText()
+    blocks, block = [], doc.begin()
+    while block.isValid():
+        blocks.append(block)
+        block = block.next()
+    heading = next(b for b in blocks if b.text().startswith("Problem"))
+    assert heading.blockFormat().headingLevel() == 3, "answer heading should render"
+    fenced = next(b for b in blocks if b.text() == "res = []" and b.blockFormat().nonBreakableLines())
+    entry = next(b for b in blocks if b.text() == "res = []" and b != fenced)
+    color = lambda b: b.begin().fragment().charFormat().foreground().color().name()  # noqa: E731
+    assert color(entry) == "#7dd3fc", f"read-aloud code color {color(entry)}"
+    assert entry.blockFormat().topMargin() == 8, "gap above each read-aloud step"
+    assert color(fenced) != "#7dd3fc", "fenced code keeps its own color"
+    assert entry.next().text().startswith("I start an empty list."), "explanation under the code"
 
 
 if __name__ == "__main__":
