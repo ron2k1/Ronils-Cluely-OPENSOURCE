@@ -216,12 +216,13 @@ def check_warm_reports_problems():
 
 def check_default_wiring():
     assert brain._main._model == "gemini-3.8-flash", brain._main._model
-    assert brain._main._thinking == "high", brain._main._thinking
+    assert brain._main._thinking == "medium", brain._main._thinking
     assert not brain._main._lean, "main session uses the full preamble"
     assert brain._auto._model == "gemini-3.5-flash-lite", brain._auto._model
     assert brain._auto._lean, "auto session uses the lean preamble"
     # High thinking on a hard problem sent nothing for up to 147s (measured), so
-    # the coding path needs a long timeout; voice keeps a short one.
+    # the coding path keeps a long timeout for anyone who sets high; voice keeps a
+    # short one.
     assert brain._main._timeout_s == 300, brain._main._timeout_s
     assert brain._auto._timeout_s == 30, brain._auto._timeout_s
 

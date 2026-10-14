@@ -8,7 +8,7 @@ Versioning is informal (personal tool).
 ## [0.4.0] - 2026-10-14
 ### Changed
 - Answers come from the Gemini API instead of a warm headless `claude` process.
-  Typed, screen, and image questions use `gemini-3.8-flash` at thinking `high`;
+  Typed, screen, and image questions use `gemini-3.8-flash` at thinking `medium`;
   voiced auto-answers use `gemini-3.5-flash-lite`. Calls are stateless, and each
   session keeps its last 3 exchanges in memory as text for follow-ups.
 - Requires `GEMINI_API_KEY`. The `claude` CLI is no longer used.

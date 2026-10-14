@@ -22,7 +22,7 @@ flowchart TD
     EARS --> TRANSCRIPT["Transcript: Them / You"]
     TRANSCRIPT --> DETECT{"Question aimed at you?"}
     DETECT -->|yes| FAST["Gemini 3.5 Flash-Lite: fast session"]
-    TYPED["Typed question"] --> MAIN["Gemini 3.8 Flash, thinking high: main session"]
+    TYPED["Typed question"] --> MAIN["Gemini 3.8 Flash, thinking medium: main session"]
     SCREEN["Solve screen or attached image"] --> MAIN
     FAST --> ANSWERS["Answers: say it out loud"]
     MAIN --> ANSWERS
@@ -201,8 +201,8 @@ for depth on purpose. These timings were measured on one machine in October 2026
 
 | Path                          | Model                   | Thinking | First word | Full answer |
 | ----------------------------- | ----------------------- | -------- | ---------- | ----------- |
-| Typed, screen, image (code)   | `gemini-3.8-flash`      | `high`   | ~8 to 9s   | ~10 to 13s  |
-| Same, if you set `medium`     | `gemini-3.8-flash`      | `medium` | ~8s        | ~10 to 11s  |
+| Typed, screen, image (code)   | `gemini-3.8-flash`      | `medium` | ~8s        | ~10 to 11s  |
+| Same, if you set `high`       | `gemini-3.8-flash`      | `high`   | ~8 to 9s   | ~10 to 13s  |
 | Same, if you set `low`        | `gemini-3.8-flash`      | `low`    | ~2s        | ~4 to 5s    |
 | Voiced auto-answer            | `gemini-3.5-flash-lite` | default  | ~1s        | ~1 to 2s    |
 
@@ -225,9 +225,10 @@ that as a lean, not a rate.
 Nearly all of the wait is thinking before the first word, and Gemini sends
 nothing at all while it thinks, so the panel sits on `thinking…` the whole time.
 That's why a typed or screen question gets `CLUELY_ANSWER_TIMEOUT` (default
-300s) before it's abandoned. `high` is the default because a wrong code answer
-costs more than the wait. Set `CLUELY_THINKING=medium` for a faster middle
-ground, or `low` when speed matters most.
+300s) before it's abandoned. `medium` is the default because on hard problems it
+answers in well under half of `high`'s time and misses rarely. Set
+`CLUELY_THINKING=high` when you'd rather wait for the extra accuracy, or `low`
+when speed matters most.
 
 Follow-ups like "explain line 4" remember the last 3 exchanges
 (`CLUELY_HISTORY_TURNS`) as text, so they don't re-send the image.
@@ -284,7 +285,7 @@ All settings are environment variables (see `src/config.py`):
 - `CLUELY_MODEL`: model for typed and vision (code) questions. Default
   `gemini-3.8-flash`.
 - `CLUELY_THINKING`: how hard that model thinks: `low`, `medium`, or `high`.
-  Default `high`. See Speed for the trade-off.
+  Default `medium`. See Speed for the trade-off.
 - `CLUELY_AUTO_MODEL`: fast model for live voiced auto-answers. Default
   `gemini-3.5-flash-lite`. Set it to `""` to answer voice on `CLUELY_MODEL`.
 - `CLUELY_AUTO_THINKING`: thinking level for voiced answers. Empty by default,
@@ -305,8 +306,8 @@ All settings are environment variables (see `src/config.py`):
 - `CLUELY_AUTO_FROM`: whose lines may trigger an auto-answer. One of `them`,
   `you`, or `both`. Default `them`.
 - `CLUELY_ANSWER_TIMEOUT`: seconds before a typed, screen, or image question is
-  abandoned. Default `300`, because `high` can think for over two minutes on a
-  hard problem.
+  abandoned. Default `300`, so `high` still fits: it can think for over two
+  minutes on a hard problem.
 - `CLUELY_AUTO_TIMEOUT`: the same limit for voiced auto-answers. Default `30`.
 - `CLUELY_ECHO_GUARD`: drop near-duplicate cross-source lines (echo or
   sidetone). `1` on (default), `0` off.
