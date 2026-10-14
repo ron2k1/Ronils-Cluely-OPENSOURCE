@@ -231,15 +231,16 @@ def _fenced_code(answer):
 
 
 def _read_aloud(answer):
-    """The read-aloud script as [code line, explanation] pairs. A line that isn't a new
-    `code` entry continues the previous explanation."""
+    """The read-aloud script as [code line, explanation] pairs. An entry is a `code`
+    line, bulleted or numbered or bare, with its explanation after a dash or on the
+    next line; any other line continues the previous explanation."""
     pairs = []
     for ln in answer.partition("Read aloud")[2].splitlines()[1:]:
-        mo = re.match(r"\s*(?:[-*]\s*)?`(.+?)`\s*[—–:-]+\s*(.+)", ln)
+        mo = re.match(r"\s*(?:(?:[-*]|\d+[.)])\s+)?`([^`\n]+)`(?:\s*[—–:-]+\s*(.*?))?\s*$", ln)
         if mo:
-            pairs.append(list(mo.groups()))
+            pairs.append([mo.group(1), mo.group(2) or ""])
         elif pairs and ln.strip():
-            pairs[-1][1] += " " + ln.strip()
+            pairs[-1][1] = (pairs[-1][1] + " " + ln.strip()).strip()
     return pairs
 
 
@@ -250,11 +251,15 @@ def _sentences(text):
 def check_read_aloud_parser():
     answer = ("```python\nx = 1\n```\n\n### Read aloud (line by line):\n"
               "`x = 1` — I set x. It starts at one.\n"
-              "- `return x` – I hand it back.\n  That's the result!\n")
+              "- `return x` – I hand it back.\n  That's the result!\n"
+              "3. `y = 2` — Numbered entries count.\n"
+              "`z = 3`\nThe explanation can sit on the next line.\n")
     pairs = _read_aloud(answer)
     assert pairs == [["x = 1", "I set x. It starts at one."],
-                     ["return x", "I hand it back. That's the result!"]], pairs
-    assert [_sentences(e) for _, e in pairs] == [2, 2], "sentence count"
+                     ["return x", "I hand it back. That's the result!"],
+                     ["y = 2", "Numbered entries count."],
+                     ["z = 3", "The explanation can sit on the next line."]], pairs
+    assert [_sentences(e) for _, e in pairs] == [2, 2, 1, 1], "sentence count"
 
 
 def live():
@@ -272,9 +277,12 @@ def live():
     assert scope["is_palindrome"]("A man, a plan, a canal: Panama"), "pasted code is wrong"
     script = _read_aloud(out)
     assert script, "no read-aloud script"
-    deep = sum(_sentences(e) >= 2 for _, e in script)
-    assert deep >= 0.8 * len(script), \
-        f"only {deep} of {len(script)} read-aloud lines get 2+ sentences"
+    # Trivial lines (left += 1) rightly get one sentence, so measure depth as words per
+    # line: the old one-sentence scripts ran about 12, the two-sentence ones about 18.
+    words = sum(len(e.split()) for _, e in script) / len(script)
+    assert words >= 15, f"read-aloud averages {words:.0f} words a line; too thin"
+    prose = re.sub(r"`[^`\n]*`", "", re.sub(r"```.*?```", "", out, flags=re.S))
+    assert "$" not in prose, "math should be plain text, not LaTeX"
     t0 = time.perf_counter()
     fast = brain.ask("What is 17 times 23? Reply with just the number.", fast=True)
     t_fast = time.perf_counter() - t0
