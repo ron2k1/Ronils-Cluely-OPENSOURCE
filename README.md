@@ -161,12 +161,14 @@ the shared screen, a coding problem, a chart.
 
 Code comes as a plain block with no line numbers, so it pastes and runs as is. Any
 answer with code in it ends with a "Read aloud (line by line)" section. That's a
-spoken script walking through the solution one line at a time. Each step starts
-with the line of code it covers, then gives two or three sentences on what it does,
-why it's there, and for the key lines, how it fits the approach or which edge case
-it handles. The script streams in after the code, so the code shows up first. Image
-questions cost more tokens, so they stay off the
-auto-answer path to keep live answering fast.
+spoken script walking through the solution one line at a time. Each step shows the
+line of code it covers in blue on its own line, with the explanation under it and
+a gap before the next step. Logic lines get two sentences, what the line does and
+why it's needed, plus a third only when it adds something like an edge case.
+Trivial lines such as `return` or `continue` get one. Math and complexity show as
+plain text like O(n log n), never as raw LaTeX. The script streams in after the
+code, so the code shows up first. Image questions cost more tokens, so they stay
+off the auto-answer path to keep live answering fast.
 
 ## On-screen controls
 

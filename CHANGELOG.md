@@ -16,8 +16,13 @@ Versioning is informal (personal tool).
 - Code in answers has no line numbers, so it pastes and runs as is. The numbers
   shifted indentation from line 10 on and broke copied code. The read-aloud
   script now quotes each code line instead of saying "Line 4".
-- The read-aloud script gives each code line two to three sentences (what it
-  does, why it's needed, and how the key lines fit the approach) instead of one.
+- The read-aloud script gives each logic line two sentences (what it does and
+  why it's needed), a third only when it adds something new, and trivial lines
+  one. It used to give every line one.
+- The panel shows each read-aloud step as its own block: the code line in blue,
+  the explanation under it, and a gap before the next step. Inline LaTeX like
+  `$O(1)$` shows as plain O(1), and an answer that opens with a heading no
+  longer shows a literal `###`.
 - `CLUELY_ANSWER_TIMEOUT` now covers typed, screen, and image questions only, and
   defaults to 300s (was 90s). At thinking `high`, a hard problem was measured
   sending nothing for 119 to 147s before its first word.
