@@ -5,6 +5,41 @@ Versioning is informal (personal tool).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-14
+### Changed
+- Answers come from the Gemini API instead of a warm headless `claude` process.
+  Typed, screen, and image questions use `gemini-3.8-flash` at thinking `medium`;
+  voiced auto-answers use `gemini-3.5-flash-lite`. Calls are stateless, and each
+  session keeps its last 3 exchanges in memory as text for follow-ups.
+- Requires `GEMINI_API_KEY`. The `claude` CLI is no longer used.
+- Panel labels say Gemini instead of Claude.
+- Code in answers has no line numbers, so it pastes and runs as is. The numbers
+  shifted indentation from line 10 on and broke copied code. The read-aloud
+  script now quotes each code line instead of saying "Line 4".
+- The read-aloud script gives each logic line two sentences (what it does and
+  why it's needed), a third only when it adds something new, and trivial lines
+  one. It used to give every line one.
+- The panel shows each read-aloud step as its own block: the code line in blue,
+  the explanation under it, and a gap before the next step. Inline LaTeX like
+  `$O(1)$` shows as plain O(1), and an answer that opens with a heading no
+  longer shows a literal `###`.
+- `CLUELY_ANSWER_TIMEOUT` now covers typed, screen, and image questions only, and
+  defaults to 300s (was 90s). At thinking `high`, a hard problem was measured
+  sending nothing for 119 to 147s before its first word.
+### Added
+- `CLUELY_MODEL`, `CLUELY_THINKING`, `CLUELY_AUTO_THINKING`,
+  `CLUELY_HISTORY_TURNS`. `CLUELY_AUTO_MODEL` now names a Gemini model.
+- `CLUELY_AUTO_TIMEOUT` (default 30s) for voiced auto-answers, so a stall can't
+  hold up the auto-answer queue.
+- Launch-time check of the key, both model names, and the thinking levels. A
+  missing or rejected key or a mistyped level shows on the status line.
+- An answer Gemini cuts off early (for example `RECITATION` or `MAX_TOKENS`) ends
+  with a note saying so, so incomplete code isn't mistaken for a full answer.
+- `tests/test_brain.py`: offline checks against the SDK's real response types,
+  plus `--live` for a real API round-trip.
+### Removed
+- `CLUELY_CLAUDE_CMD` and `CLUELY_CLAUDE_MODEL`.
+
 ## [0.3.0] - 2026-06-20
 ### Changed
 - Public release. The repository is now public.

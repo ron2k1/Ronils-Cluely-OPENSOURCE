@@ -1,21 +1,27 @@
-"""Headless Claude backend — persistent warm session for low latency.
+"""Gemini backend: streams answers from the Gemini API.
 
-A cold `claude -p` pays full session-init (SessionStart hooks: vault digest,
-memory consolidation, skill reindex) on every call — measured ~7s. That is far
-too slow for live answering. Instead we keep ONE `claude` process alive in
-stream-json *input* mode: it reads newline-delimited JSON user messages from
-stdin until stdin closes. We never close stdin, so the hooks run exactly once at
-startup and every subsequent question is just a model round-trip (~2-3s).
+Two sessions share one API client. The main session answers typed and vision
+(code) questions on a strong model with deep thinking; the auto session answers
+live voiced questions on the fastest model with a lean preamble.
 
-Uses your existing Claude login, so there is no API key and no per-token cost.
+Calls are stateless (`generate_content_stream`), so Google keeps no conversation
+state server-side; prompts carry other participants' words from the call. Each
+session instead remembers its last few question/answer pairs in memory, text
+only, so a follow-up like "explain line 4" works without re-sending the
+transcript or the image.
 """
-import json
-import subprocess
+import base64
+import os
 import threading
+import time
 
-from config import ANSWER_TIMEOUT_S, AUTO_MODEL, CLAUDE_CMD, CLAUDE_MODEL
+from google import genai
+from google.genai import errors, types
 
-CREATE_NO_WINDOW = 0x08000000
+from config import (
+    ANSWER_TIMEOUT_S, API_KEY_ENV, AUTO_ANSWER_TIMEOUT_S, AUTO_MODEL, AUTO_THINKING,
+    HISTORY_TURNS, MODEL, THINKING,
+)
 
 SYSTEM_PREAMBLE = (
     "You are Cluely, a private real-time copilot for the user during their own "
@@ -25,14 +31,21 @@ SYSTEM_PREAMBLE = (
     "requests, return tight bullet points. "
     "Whenever your answer contains code, FIRST restate the problem in one or two plain "
     "first-person sentences under a 'Problem (say this first):' heading so I can say it "
-    "out loud and show I understood what was asked; then present the solution with a line "
-    "number at the start of every line, then finish with a section headed "
-    "'Read aloud (line by line):' — a spoken script keyed to those line numbers "
-    "('Line 1: ...', 'Line 2: ...', covering every line). Write it in a natural, "
+    "out loud and show I understood what was asked; then present the solution as plain "
+    "code in a fenced code block with NO line numbers, so it pastes and runs as is; then "
+    "finish with a section headed 'Read aloud (line by line):' — a spoken script that "
+    "walks through the code in order, covering every line, each entry starting with that "
+    "code line in backticks ('`<code line>` — ...'). Write it in a natural, "
     "conversational first-person voice — the way a person actually talks through "
     "their own code: contractions, plain everyday words, relaxed but clear. Not "
-    "stiff, not robotic, no textbook phrasing. One short spoken sentence per line "
-    "saying what it does and why. "
+    "stiff, not robotic, no textbook phrasing, short plain sentences. Default to two "
+    "sentences per line: what it does and why it's needed. Add a third only when it says "
+    "something new, like the edge case it handles or how it fits the approach, never a "
+    "summary like 'it keeps things clean'. Base cases, loops, recursive calls, and undo "
+    "steps all count as logic. Only truly trivial lines (the class header, a bare return, "
+    "continue, or else, a plain empty list) get a single sentence. "
+    "Put each entry on its own line. Write math and complexity as plain text "
+    "(O(n log n), r + c, n x n), never LaTeX or dollar signs. "
     "You assist the user's own thinking; "
     "never produce content intended to deceive an interviewer, examiner, or anyone "
     "evaluating the user's own ability."
@@ -50,8 +63,10 @@ LEAN_PREAMBLE = (
 )
 
 
-def build_prompt(question: str, transcript: str = "", notes: str = "", lean: bool = False) -> str:
-    parts = [LEAN_PREAMBLE if lean else SYSTEM_PREAMBLE, ""]
+def build_prompt(question: str, transcript: str = "", notes: str = "") -> str:
+    """The user turn: recent transcript, running notes, then the question. The
+    preamble rides separately as the system instruction."""
+    parts = []
     if transcript and transcript.strip():
         parts += ["## Live transcript (recent)", transcript.strip()[-6000:], ""]
     if notes and notes.strip():
@@ -60,190 +75,170 @@ def build_prompt(question: str, transcript: str = "", notes: str = "", lean: boo
     return "\n".join(parts)
 
 
-def _extract(evt: dict, state: dict) -> str:
-    """Pull display text out of one stream-json event.
+def _chunk_text(chunk) -> str:
+    """Answer text from one streamed response, skipping any thought parts."""
+    out = []
+    for cand in chunk.candidates or []:
+        if cand.content and cand.content.parts:
+            out += [p.text for p in cand.content.parts if p.text and not p.thought]
+    return "".join(out)
 
-    Handles both partial deltas (--include-partial-messages) and the full
-    assistant message. Once we have seen any delta we ignore the final assistant
-    message so the answer is not printed twice.
-    """
-    etype = evt.get("type")
-    if etype == "stream_event":
-        ev = evt.get("event", {})
-        if ev.get("type") == "content_block_delta":
-            delta = ev.get("delta", {})
-            if delta.get("type") == "text_delta":
-                state["saw_delta"] = True
-                return delta.get("text", "")
-        return ""
-    if etype == "assistant" and not state.get("saw_delta"):
-        out = []
-        for block in evt.get("message", {}).get("content", []):
-            if block.get("type") == "text":
-                out.append(block.get("text", ""))
-        return "".join(out)
+
+def _stop_reason(chunk) -> str:
+    """Why the model stopped early (a blocked prompt, or a finish other than a
+    normal STOP such as RECITATION or MAX_TOKENS), or "" for a normal finish."""
+    feedback = chunk.prompt_feedback
+    if feedback and feedback.block_reason:
+        return f"blocked: {getattr(feedback.block_reason, 'name', feedback.block_reason)}"
+    for cand in chunk.candidates or []:
+        reason = cand.finish_reason
+        if reason and reason not in (types.FinishReason.STOP,
+                                     types.FinishReason.FINISH_REASON_UNSPECIFIED):
+            return f"stopped: {getattr(reason, 'name', reason)}"
     return ""
 
 
-def _user_message(text: str, image_b64: str = "") -> str:
-    content = []
-    if image_b64:
-        content.append({"type": "image", "source": {
-            "type": "base64", "media_type": "image/png", "data": image_b64}})
-    content.append({"type": "text", "text": text})
-    return json.dumps({"type": "user", "message": {"role": "user", "content": content}})
+class MissingKeyError(RuntimeError):
+    """GEMINI_API_KEY is not set."""
+
+
+_client = None
+_client_lock = threading.Lock()
+
+
+def _shared_client():
+    """One API client for both sessions, built on first use so a missing key
+    surfaces as a readable error in the panel instead of a crash at import."""
+    global _client
+    with _client_lock:
+        if _client is None:
+            key = os.environ.get(API_KEY_ENV, "").strip()
+            if not key:
+                raise MissingKeyError(
+                    f"{API_KEY_ENV} is not set. Create a key at "
+                    "https://aistudio.google.com/apikey and set it as a user "
+                    "environment variable, then restart Cluely.")
+            _client = genai.Client(api_key=key)
+        return _client
 
 
 class _Session:
-    """A single long-lived `claude` process serving many turns over one pipe."""
+    """One model + preamble + short in-memory history, serving one turn at a time."""
 
-    def __init__(self, model=""):
-        self._proc = None
+    def __init__(self, model, thinking="", lean=False, timeout_s=ANSWER_TIMEOUT_S,
+                 history_turns=HISTORY_TURNS, client=None):
         self._model = model
+        self._thinking = thinking
+        self._lean = lean
+        self._timeout_s = timeout_s
+        self._history_turns = history_turns
+        self._client = client
+        self._history: list[types.Content] = []
         self._lock = threading.Lock()
 
-    def _alive(self) -> bool:
-        return self._proc is not None and self._proc.poll() is None
+    def _get_client(self):
+        return self._client or _shared_client()
 
-    def _spawn(self):
-        cmd = [
-            "cmd", "/c", CLAUDE_CMD, "-p",
-            "--input-format", "stream-json",
-            "--output-format", "stream-json",
-            "--verbose", "--include-partial-messages",
-        ]
-        if self._model:
-            cmd += ["--model", self._model]
-        self._proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            creationflags=CREATE_NO_WINDOW,
-        )
+    def _config(self) -> types.GenerateContentConfig:
+        thinking = None
+        if self._thinking:
+            # The SDK's enum only warns on an unknown value and sends it anyway,
+            # so check membership ourselves: a typo like "hgih" fails here.
+            name = self._thinking.strip().upper()
+            if name not in types.ThinkingLevel.__members__:
+                raise ValueError(f"unknown thinking level {self._thinking!r}; "
+                                 "use low, medium or high")
+            thinking = types.ThinkingConfig(thinking_level=types.ThinkingLevel[name])
+        # The per-request timeout is both how long httpx waits between bytes and
+        # the X-Server-Timeout the SDK sends, so the server gives up at the same point.
+        return types.GenerateContentConfig(
+            system_instruction=LEAN_PREAMBLE if self._lean else SYSTEM_PREAMBLE,
+            thinking_config=thinking,
+            http_options=types.HttpOptions(timeout=int(self._timeout_s * 1000)))
 
-    def _kill_proc(self):
-        """Force-kill the current process (watchdog callback). Killing it closes
-        stdout, which unblocks the reader loop in _send_and_read with EOF."""
-        p = self._proc
-        if p is not None:
-            try:
-                p.kill()
-            except Exception:
-                pass
-
-    def _send_and_read(self, prompt: str, on_text, image_b64: str = "") -> str:
-        """Write one user message and read events until the turn's result.
-
-        A watchdog timer guards against a wedged turn: if no `result` event
-        arrives within ANSWER_TIMEOUT_S the process is killed, the blocking
-        stdout iteration returns at EOF, and we fall through with whatever
-        (likely empty) text we have. The caller then raises/respawns — so a
-        single hung turn can never hold the session lock indefinitely.
-        """
-        self._proc.stdin.write(_user_message(prompt, image_b64) + "\n")
-        self._proc.stdin.flush()
-
-        watchdog = threading.Timer(ANSWER_TIMEOUT_S, self._kill_proc)
-        watchdog.daemon = True
-        watchdog.start()
-
-        state: dict = {}
+    def _stream(self, contents, on_text) -> tuple[str, str]:
+        """Stream one answer; returns (text, stop reason or ""). The HTTP timeout
+        catches silence; the deadline catches a stream trickling past the budget."""
+        deadline = time.monotonic() + self._timeout_s
         collected: list[str] = []
-        try:
-            for line in self._proc.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    evt = json.loads(line)
-                except json.JSONDecodeError:
-                    continue  # hook noise / non-JSON lines
-                chunk = _extract(evt, state)
-                if chunk:
-                    collected.append(chunk)
-                    if on_text:
-                        on_text(chunk)
-                if evt.get("type") == "result":
-                    break  # turn complete
-        finally:
-            watchdog.cancel()
-        return "".join(collected)
+        reason = ""
+        stream = self._get_client().models.generate_content_stream(
+            model=self._model, contents=contents, config=self._config())
+        for chunk in stream:
+            text = _chunk_text(chunk)
+            if text:
+                collected.append(text)
+                if on_text:
+                    on_text(text)
+            reason = _stop_reason(chunk) or reason
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"answer took longer than {self._timeout_s:.0f}s")
+        return "".join(collected), reason
 
     def warm(self):
-        """Pre-pay session-init (hooks) and one model turn so the first real
-        question is instant. Safe to call from a background thread at startup."""
-        with self._lock:
-            if not self._alive():
-                self._spawn()
-                try:
-                    self._send_and_read("Reply with the single word READY.", None)
-                except Exception:
-                    pass
+        """Validate the config and look the model up: no tokens spent, but it
+        proves the thinking level, the key, and the model name. Raises on failure."""
+        self._config()
+        self._get_client().models.get(model=self._model)
 
-    def ask(self, question, transcript="", notes="", on_text=None,
-            stop_event=None, image_b64="", lean=False) -> str:
-        prompt = build_prompt(question, transcript, notes, lean=lean)
+    def ask(self, question, transcript="", notes="", on_text=None, image_b64="") -> str:
+        parts = []
+        if image_b64:
+            parts.append(types.Part.from_bytes(
+                data=base64.b64decode(image_b64), mime_type="image/png"))
+        parts.append(types.Part.from_text(text=build_prompt(question, transcript, notes)))
         with self._lock:
-            if not self._alive():
-                self._spawn()
-            try:
-                out = self._send_and_read(prompt, on_text, image_b64)
-            except (BrokenPipeError, OSError, ValueError):
-                self._spawn()  # pipe died; restart once and retry
-                out = self._send_and_read(prompt, on_text, image_b64)
-        if not out.strip():
-            raise RuntimeError(
-                "no response (session may have died or needs `claude` re-login)"
-            )
+            out, reason = self._stream(
+                self._history + [types.Content(role="user", parts=parts)], on_text)
+            if not out.strip():
+                raise RuntimeError(f"no answer from Gemini ({reason or 'empty response'})")
+            if reason:
+                # A cut-off code answer must say so; silently incomplete code is wrong code.
+                note = f"\n\n_({reason}; the answer may be incomplete)_"
+                if on_text:
+                    on_text(note)
+                out += note
+            asked = question.strip() + (" [about an attached image]" if image_b64 else "")
+            self._history += [
+                types.Content(role="user", parts=[types.Part.from_text(text=asked)]),
+                types.Content(role="model", parts=[types.Part.from_text(text=out)]),
+            ]
+            self._history = self._history[-2 * self._history_turns:] if self._history_turns else []
         return out
 
-    def shutdown(self):
+    def reset(self):
         with self._lock:
-            if self._proc is not None:
-                try:
-                    self._proc.stdin.close()
-                except Exception:
-                    pass
-                self._proc.terminate()
-                self._proc = None
+            self._history = []
 
 
-# Strong session for typed + vision (code) questions; a separate FAST session for
-# live voiced auto-answers. If AUTO_MODEL is unset/equal, both names point at one
-# session so we don't pay for two processes.
-_main = _Session(CLAUDE_MODEL)
-_auto = _main if (not AUTO_MODEL or AUTO_MODEL == CLAUDE_MODEL) else _Session(AUTO_MODEL)
+# Strong session for typed + vision (code) questions; a fast one for live voiced
+# auto-answers. Separate sessions keep separate preambles and histories.
+_main = _Session(MODEL, THINKING)
+_auto = _Session(AUTO_MODEL, AUTO_THINKING, lean=True, timeout_s=AUTO_ANSWER_TIMEOUT_S)
 
 
-def _reset():
-    """Drop accumulated conversation history by respawning the warm session(s).
-    The next ask() lazily respawns, so this is just a clean teardown."""
-    _auto.shutdown()
-    if _auto is not _main:
-        _main.shutdown()
-
-
-def warm():
-    _main.warm()
-    if _auto is not _main:
+def warm() -> str:
+    """Check the thinking levels, the key, and both model names at launch.
+    Returns a short problem for the status line, or "" when all is good."""
+    try:
+        _main.warm()
         _auto.warm()
+    except errors.APIError as exc:
+        return f"⚠ Gemini {exc.code}: {exc.status}"
+    except MissingKeyError:
+        return f"⚠ {API_KEY_ENV} not set"
+    except ValueError as exc:
+        return f"⚠ {exc}"
+    except Exception as exc:
+        return f"⚠ Gemini unreachable ({type(exc).__name__})"
+    return ""
 
 
-def ask(question, transcript="", notes="", on_text=None, stop_event=None,
-        image_b64="", fast=False) -> str:
+def ask(question, transcript="", notes="", on_text=None, image_b64="", fast=False) -> str:
     session = _auto if fast else _main
-    return session.ask(question, transcript, notes, on_text, stop_event,
-                       image_b64, lean=fast)
+    return session.ask(question, transcript, notes, on_text, image_b64)
 
 
 def reset():
-    _reset()
-
-
-def shutdown():
-    _reset()
+    _main.reset()
+    _auto.reset()

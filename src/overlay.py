@@ -8,7 +8,9 @@ import time
 from difflib import SequenceMatcher
 
 from PySide6.QtCore import QBuffer, QByteArray, QEvent, Qt, Signal, QThread
-from PySide6.QtGui import QColor, QImage, QKeySequence, QPainter
+from PySide6.QtGui import (
+    QColor, QImage, QKeySequence, QPainter, QTextCharFormat, QTextCursor,
+)
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QSizeGrip, QTabWidget, QTextBrowser, QTextEdit,
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 import brain
+from answer_format import opens_with_block, tidy
 from config import (
     APP_NAME, AUTO_FROM, AUTO_MIN_NEWCHARS, AUTO_THROTTLE_S, ECHO_GUARD,
     ECHO_RATIO, ECHO_WINDOW_S, MY_NAME, NOTES_DIR, OPACITY, VISION_MONITOR,
@@ -70,13 +73,21 @@ VISION_PROMPT = (
     "constraint or edge case. "
     "(2) the optimal approach in one line, (3) time and space complexity, "
     "(4) a complete, correct, runnable solution in the language shown (default Python), "
-    "with a line number at the start of every line, "
-    "(5) a 'Read aloud (line by line):' section keyed to those line numbers "
-    "('Line 1: ...', 'Line 2: ...', covering every line) — one short, natural spoken "
-    "sentence per line in a relaxed, conversational first-person voice (contractions, "
-    "plain words, not robotic) that I can read out verbatim. "
+    "as plain code in a fenced code block with NO line numbers, so it pastes and runs as is, "
+    "(5) a 'Read aloud (line by line):' section that walks through the code in order, "
+    "covering every line, each entry starting with that code line in backticks "
+    "('`<code line>` — ...'), each entry on its own line, in a relaxed, conversational "
+    "first-person voice (contractions, short plain sentences, not robotic) that I can "
+    "read out verbatim. Default to two sentences per line (what it does and why it's "
+    "needed); add a third only when it says something new, like the edge case it handles "
+    "or how it fits the approach, never a summary like 'it keeps things clean'. Base "
+    "cases, loops, recursive calls, and undo steps all count as logic. Only truly trivial "
+    "lines (the class header, a bare return, continue, or else, a plain empty list) get "
+    "a single sentence. "
+    "Write math and complexity as plain text (O(n log n), r + c, n x n), never LaTeX or "
+    "dollar signs. "
     "If it is not a coding problem, concisely explain what is on screen and what I should "
-    "say or do next. Keep it tight and glanceable."
+    "say or do next. Keep everything except the read-aloud script tight and glanceable."
 )
 
 
@@ -125,6 +136,7 @@ class Overlay(QWidget):
     sig_vision = Signal()
     sig_image = Signal()
     sig_quit = Signal()
+    sig_status = Signal(str)             # status text from a background thread
 
     def __init__(self):
         super().__init__()
@@ -159,6 +171,7 @@ class Overlay(QWidget):
         self.sig_vision.connect(self.ask_screen)
         self.sig_image.connect(self.attach_image)
         self.sig_quit.connect(self._quit)
+        self.sig_status.connect(self._set_status)
         self.input.installEventFilter(self)
 
     # ---------- construction ----------
@@ -229,7 +242,7 @@ class Overlay(QWidget):
         av.addWidget(self.chat, 1)
         inrow = QHBoxLayout()
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Ask Claude…  (Enter, or paste an image)")
+        self.input.setPlaceholderText("Ask Gemini…  (Enter, or paste an image)")
         self.input.returnPressed.connect(self.on_ask)
         self.btn_img = QPushButton("📎")
         self.btn_img.setFixedWidth(36)
@@ -509,24 +522,24 @@ class Overlay(QWidget):
         self.input.clear()
         self._convo.append(("you", q))
         self._render_chat()
-        self._start_worker(q, self._recent_transcript(), "claude")
+        self._start_worker(q, self._recent_transcript(), "ai")
 
     def _recent_transcript(self):
         return "\n".join(self._transcript_buf)[-4000:]
 
     def ask_screen(self):
-        """Capture the screen and ask Claude about it (on-demand vision)."""
+        """Capture the screen and ask Gemini about it (on-demand vision)."""
         try:
             from vision import grab_screen_b64
             img = grab_screen_b64(VISION_MONITOR)
         except Exception as exc:
             self._convo.append(("you", "🖥️ screen capture"))
-            self._convo.append(("claude", f"_(screen capture failed: {exc})_"))
+            self._convo.append(("ai", f"_(screen capture failed: {exc})_"))
             self._render_chat()
             return
         self._convo.append(("you", "🖥️ Sent my screen — solve / explain it"))
         self._render_chat()
-        self._start_worker(VISION_PROMPT, self._recent_transcript(), "claude", image_b64=img)
+        self._start_worker(VISION_PROMPT, self._recent_transcript(), "ai", image_b64=img)
 
     def attach_image(self):
         """Attach an image from the clipboard (preferred) or a file picker."""
@@ -555,7 +568,7 @@ class Overlay(QWidget):
         # Empty box on an image = treat it as a full solve (same structured restate +
         # solution + read-aloud as the Solve-screen path).
         question = q or VISION_PROMPT
-        self._start_worker(question, self._recent_transcript(), "claude", image_b64=b64)
+        self._start_worker(question, self._recent_transcript(), "ai", image_b64=b64)
 
     def eventFilter(self, obj, event):
         # Ctrl+V in the question box attaches a clipboard image instead of text.
@@ -611,10 +624,48 @@ class Overlay(QWidget):
             elif role == "auto":
                 out.append(f"**↳ Suggested:** {text}")
             else:
-                out.append(f"**Claude:** {text}")
+                text = tidy(text)
+                # A heading, list, or table glued onto the label renders as raw "###".
+                sep = "\n\n" if opens_with_block(text) else " "
+                out.append(f"**Gemini:**{sep}{text}")
         self.chat.setMarkdown("\n\n".join(out))
+        self._polish_chat()
         bar = self.chat.verticalScrollBar()
         bar.setValue(bar.maximum())
+
+    def _polish_chat(self):
+        """Qt's markdown import gives inline code the body color and no spacing, so
+        color code spans and open a gap above each line that starts with code (a
+        read-aloud entry). Fenced code blocks are left as they are."""
+        doc = self.chat.document()
+        spans, entry_blocks = [], []
+        block = doc.begin()
+        while block.isValid():
+            if not block.blockFormat().nonBreakableLines():
+                it, first = block.begin(), True
+                while not it.atEnd():
+                    frag = it.fragment()
+                    if frag.charFormat().fontFixedPitch():
+                        spans.append((frag.position(), frag.position() + frag.length()))
+                        if first:
+                            entry_blocks.append(block)
+                    first = False
+                    it += 1
+            block = block.next()
+        accent = QTextCharFormat()
+        accent.setForeground(QColor("#7dd3fc"))
+        cur = QTextCursor(doc)
+        cur.beginEditBlock()  # one relayout for all the edits, not one per span
+        for start, end in spans:
+            cur.setPosition(start)
+            cur.setPosition(end, QTextCursor.KeepAnchor)
+            cur.mergeCharFormat(accent)
+        for block in entry_blocks:
+            fmt = block.blockFormat()
+            fmt.setTopMargin(8)
+            cur.setPosition(block.position())
+            cur.setBlockFormat(fmt)
+        cur.endEditBlock()
 
     # ---------- hotkey slots ----------
     def toggle_visible(self):

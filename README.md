@@ -3,10 +3,10 @@
 Cluely is a screen-capture-invisible AI overlay for your own meetings and
 presentations. The panel floats on top of everything you see, but it renders
 blank in Zoom screenshare, OBS, and capture-based screenshots. It does that with
-`SetWindowDisplayAffinity` and the `WDA_EXCLUDEFROMCAPTURE` flag. It runs on a
-warm headless Claude using your existing `claude` login, so there's no API key
-and no per-token cost. It listens to the call locally and can answer questions
-out loud in real time.
+`SetWindowDisplayAffinity` and the `WDA_EXCLUDEFROMCAPTURE` flag. Answers come
+from the Gemini API: `gemini-3.8-flash` with deep thinking for typed, screen,
+and image questions, and `gemini-3.5-flash-lite` for live voiced answers. It
+listens to the call locally and can answer questions out loud in real time.
 
 **Intended use:** your own meetings, demos, and presentations. Not for
 interviews, exams, or any setting that measures your own unaided ability. The
@@ -21,8 +21,8 @@ flowchart TD
     SYS["Call audio via WASAPI loopback"] --> EARS
     EARS --> TRANSCRIPT["Transcript: Them / You"]
     TRANSCRIPT --> DETECT{"Question aimed at you?"}
-    DETECT -->|yes| FAST["Warm Claude: fast session"]
-    TYPED["Typed question"] --> MAIN["Warm Claude: main session"]
+    DETECT -->|yes| FAST["Gemini 3.5 Flash-Lite: fast session"]
+    TYPED["Typed question"] --> MAIN["Gemini 3.8 Flash, thinking medium: main session"]
     SCREEN["Solve screen or attached image"] --> MAIN
     FAST --> ANSWERS["Answers: say it out loud"]
     MAIN --> ANSWERS
@@ -36,7 +36,7 @@ Two audio sources feed one local transcriber. Your mic gives the `You` lines.
 The call's own speaker output, captured through WASAPI loopback, gives the `Them`
 lines. faster-whisper turns both into text in the `Transcript` tab. When a line
 from the other side looks like a question aimed at you, Cluely sends the recent
-transcript to a fast Claude session and streams a short answer into the
+transcript to a fast Gemini session and streams a short answer into the
 `Answers` tab. Typed questions and screen or image questions go to a stronger
 session instead. None of the panel shows up in a screen share.
 
@@ -48,9 +48,9 @@ console-less launcher, and `.lnk` shortcuts.
 
 - Windows 10 or 11
 - Python 3.10 or newer
-- The Claude CLI, installed and logged in. Cluely uses your local login, so you
-  don't need an API key. Check it with `claude --version`. If `claude` isn't on
-  your PATH, set `CLUELY_CLAUDE_CMD` to its full path.
+- A Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey),
+  set as the `GEMINI_API_KEY` environment variable (see Setup). Keep it out of
+  the repo.
 - A GPU is optional. Set `CLUELY_WHISPER_DEVICE=cuda` to speed up
   transcription. It falls back to CPU on its own if the CUDA libraries aren't
   there.
@@ -63,6 +63,11 @@ From a clone of the repo:
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
+
+Add your Gemini key as a user environment variable. Open Start, search for "Edit
+environment variables for your account", and add `GEMINI_API_KEY` with your key
+as the value. Using the dialog keeps the key out of your shell history. Programs
+started after that see it, so relaunch Cluely if it was already running.
 
 Then create the launcher shortcut once (optional):
 
@@ -82,8 +87,9 @@ Or run it directly:
 .\.venv\Scripts\python.exe src\main.py
 ```
 
-On launch it warms the Claude session in the background. That warm-up takes about
-5 to 7 seconds, once, so your first real question is fast.
+On launch it checks your key, both model names, and the thinking levels in the
+background. If something is wrong, the status line says so right away, for
+example `⚠ GEMINI_API_KEY not set` or `⚠ Gemini 400: INVALID_ARGUMENT`.
 
 ## Live mode
 
@@ -124,8 +130,8 @@ each other. If another question arrives while Cluely is still answering, the
 newest one is queued and fires the instant the current answer finishes. Older
 mid-answer questions are dropped, so by the time you're free the live one is the
 most recent question. A question you type runs on its own and doesn't disturb the
-auto queue. If a model turn ever stalls, a watchdog (`CLUELY_ANSWER_TIMEOUT`,
-default 90s) kills and respawns the session so answering can't wedge.
+auto queue. If a voiced answer ever stalls, it's abandoned after
+`CLUELY_AUTO_TIMEOUT` (default 30s) so the queue can't wedge.
 
 ### Echo and cross-talk guard
 
@@ -141,7 +147,7 @@ Tune or disable it with the `CLUELY_ECHO_*` vars below.
 Cluely can also see, which helps with anything audio can't catch. A diagram on
 the shared screen, a coding problem, a chart.
 
-- `Solve screen` (or `Ctrl+Alt+S`) captures your screen and asks Claude to read
+- `Solve screen` (or `Ctrl+Alt+S`) captures your screen and asks Gemini to read
   or solve what's on it. Cluely's own panel is excluded from that capture, so it
   never shows up in the image. Set `CLUELY_VISION_MONITOR` to pick the monitor
   (0 is all, 1 is primary, 2 is the next one).
@@ -153,10 +159,16 @@ the shared screen, a coding problem, a chart.
   this, solve or explain it." Images are PNG-encoded in memory with no temp
   files.
 
-Any answer with code in it ends with a "Read aloud (line by line)" section. That's
-a spoken script walking through the solution one line at a time in plain sentences
-you can read out. Image questions cost more tokens, so they stay off the
-auto-answer path to keep live answering fast.
+Code comes as a plain block with no line numbers, so it pastes and runs as is. Any
+answer with code in it ends with a "Read aloud (line by line)" section. That's a
+spoken script walking through the solution one line at a time. Each step shows the
+line of code it covers in blue on its own line, with the explanation under it and
+a gap before the next step. Logic lines get two sentences, what the line does and
+why it's needed, plus a third only when it adds something like an edge case.
+Trivial lines such as `return` or `continue` get one. Math and complexity show as
+plain text like O(n log n), never as raw LaTeX. The script streams in after the
+code, so the code shows up first. Image questions cost more tokens, so they stay
+off the auto-answer path to keep live answering fast.
 
 ## On-screen controls
 
@@ -184,13 +196,42 @@ want it listening.
 
 ## Speed
 
-A cold `claude -p` pays full session-init on every call, about 5 to 7 seconds of
-SessionStart hooks. Cluely keeps one `claude` process alive in stream-json input
-mode, so that cost is paid once at startup. Every answer after that is just a
-model round-trip, measured around 2 to 3 seconds. Voiced auto-answers run on a
-separate fast session (`CLUELY_AUTO_MODEL`, default `haiku`) with a lean
-preamble, so they come back quicker than typed or vision answers, which use the
-stronger model.
+Answers stream into the panel as they're written. The two sessions trade speed
+for depth on purpose. These timings were measured on one machine in October 2026:
+
+| Path                          | Model                   | Thinking | First word | Full answer |
+| ----------------------------- | ----------------------- | -------- | ---------- | ----------- |
+| Typed, screen, image (code)   | `gemini-3.8-flash`      | `medium` | ~8s        | ~10 to 11s  |
+| Same, if you set `high`       | `gemini-3.8-flash`      | `high`   | ~8 to 9s   | ~10 to 13s  |
+| Same, if you set `low`        | `gemini-3.8-flash`      | `low`    | ~2s        | ~4 to 5s    |
+| Voiced auto-answer            | `gemini-3.5-flash-lite` | default  | ~1s        | ~1 to 2s    |
+
+Those code timings are for a standard interview problem (longest substring
+without repeating characters). A hard one costs much more. On a problem with
+2e5 intervals and 2e5 queries that needs an O((n + q) log² n) answer:
+
+| Thinking | First word   | Full answer  |
+| -------- | ------------ | ------------ |
+| `high`   | ~68 to 147s  | ~83 to 159s  |
+| `medium` | ~11 to 18s   | ~23 to 28s   |
+| `low`    | ~3s          | ~16s         |
+
+Accuracy, from three hard problems asked twice at each level and judged against
+a brute force on 150 random cases: `high` solved 6 of 6, with a median of 54s
+per answer. `medium` solved 5 of 6 in a median of 21s. Its miss was a real logic
+bug on the hardest problem. Six answers per level is a small sample, so read
+that as a lean, not a rate.
+
+Nearly all of the wait is thinking before the first word, and Gemini sends
+nothing at all while it thinks, so the panel sits on `thinking…` the whole time.
+That's why a typed or screen question gets `CLUELY_ANSWER_TIMEOUT` (default
+300s) before it's abandoned. `medium` is the default because on hard problems it
+answers in well under half of `high`'s time and misses rarely. Set
+`CLUELY_THINKING=high` when you'd rather wait for the extra accuracy, or `low`
+when speed matters most.
+
+Follow-ups like "explain line 4" remember the last 3 exchanges
+(`CLUELY_HISTORY_TURNS`) as text, so they don't re-send the image.
 
 Voiced-answer latency is roughly the capture window (at most
 `CLUELY_CHUNK_SECONDS`, default 2s) plus whisper decode plus the model
@@ -214,15 +255,25 @@ loudest half-second of the window rather than the whole-window average, so brief
 speech survives. If a very soft speaker still gets dropped, raise mic volume or
 lower `CLUELY_CHUNK_SECONDS`.
 
+**An answer ends with `(stopped: RECITATION; the answer may be incomplete)`.**
+Gemini cut the answer off before it finished, here because the code closely
+matched a known source. Don't use the code as is. Ask again or rephrase. Other
+reasons, like `MAX_TOKENS` or `blocked: SAFETY`, show up the same way. When
+nothing came back at all, the panel shows the reason as an error instead.
+
 ## Privacy
 
-Cluely runs locally. Audio is transcribed on your machine with faster-whisper.
-The text that goes to Claude rides the same warm `claude` login you already use
-from the terminal.
+Audio never leaves your machine. It's transcribed locally with faster-whisper.
+To get an answer, Cluely sends Google's Gemini API the recent transcript, your
+notes, your question, and any screenshot or image you attach. Calls are
+stateless, so Cluely asks Google to keep no conversation state between them.
+Google's terms decide what happens to that content. On the free tier, Google
+says it may use what you send to improve its products. On a paid project it
+says it won't. If your meetings are sensitive, use a paid key.
 
 Your notes, transcripts, and saved answers stay on your machine. The `notes/`
 folder is gitignored and never committed. That matters because a transcript holds
-other people's words from the call, and those should not leave your machine. This
+other people's words from the call, and those must never land in a repo. This
 repo is public, so never commit anything from `notes/`, and don't paste real
 meeting content into the code or docs.
 
@@ -230,14 +281,19 @@ meeting content into the code or docs.
 
 All settings are environment variables (see `src/config.py`):
 
-- `CLUELY_CLAUDE_CMD`: full path to the Claude CLI. Defaults to `claude` on your
-  PATH, then the npm-global location. Set it if `claude` isn't on your PATH.
+- `GEMINI_API_KEY`: your Gemini API key. Required.
+- `CLUELY_MODEL`: model for typed and vision (code) questions. Default
+  `gemini-3.8-flash`.
+- `CLUELY_THINKING`: how hard that model thinks: `low`, `medium`, or `high`.
+  Default `medium`. See Speed for the trade-off.
+- `CLUELY_AUTO_MODEL`: fast model for live voiced auto-answers. Default
+  `gemini-3.5-flash-lite`. Set it to `""` to answer voice on `CLUELY_MODEL`.
+- `CLUELY_AUTO_THINKING`: thinking level for voiced answers. Empty by default,
+  which uses the model's own default.
+- `CLUELY_HISTORY_TURNS`: how many earlier question and answer pairs a follow-up
+  can see. Default `3`. `0` turns follow-up memory off.
 - `CLUELY_MY_NAME`: your name, so a spoken "Ada?" counts as a question aimed
   at you. Empty by default, and each name word is matched.
-- `CLUELY_CLAUDE_MODEL`: model for typed and vision (code) questions. Defaults to
-  your account default.
-- `CLUELY_AUTO_MODEL`: fast model for live voiced auto-answers. Default `haiku`.
-  Set it to `""` to share one session with `CLUELY_CLAUDE_MODEL`.
 - `CLUELY_CHUNK_SECONDS`: audio window before a line is transcribed. Lower means
   faster pickup and slightly less accuracy. Default `2.0`.
 - `CLUELY_WHISPER_MODEL` / `_DEVICE` / `_COMPUTE`: transcription size and
@@ -249,8 +305,10 @@ All settings are environment variables (see `src/config.py`):
 - `CLUELY_AUTO_THROTTLE` / `CLUELY_AUTO_MINCHARS`: auto-answer pacing.
 - `CLUELY_AUTO_FROM`: whose lines may trigger an auto-answer. One of `them`,
   `you`, or `both`. Default `them`.
-- `CLUELY_ANSWER_TIMEOUT`: seconds before a stalled model turn is killed and the
-  session respawned. Default `90`.
+- `CLUELY_ANSWER_TIMEOUT`: seconds before a typed, screen, or image question is
+  abandoned. Default `300`, so `high` still fits: it can think for over two
+  minutes on a hard problem.
+- `CLUELY_AUTO_TIMEOUT`: the same limit for voiced auto-answers. Default `30`.
 - `CLUELY_ECHO_GUARD`: drop near-duplicate cross-source lines (echo or
   sidetone). `1` on (default), `0` off.
 - `CLUELY_ECHO_WINDOW` / `CLUELY_ECHO_RATIO`: echo lookback seconds (default

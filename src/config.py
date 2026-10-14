@@ -4,7 +4,6 @@ Everything is overridable via environment variables so you can tune behaviour
 without editing code (e.g. set CLUELY_WHISPER_MODEL=medium.en for accuracy).
 """
 import os
-import shutil
 from pathlib import Path
 
 APP_NAME = "Cluely"
@@ -12,32 +11,28 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 NOTES_DIR = BASE_DIR / "notes"
 NOTES_DIR.mkdir(exist_ok=True)
 
-# --- Headless Claude (uses your existing `claude` login, no API key needed) ---
-def _resolve_claude_cmd() -> str:
-    """Find the Claude CLI without assuming how it was installed.
-
-    Order: explicit override, then whatever `claude` is on PATH (covers the
-    native installer, winget, and an npm global install), then the npm-global
-    default as a last resort. So a fresh clone works for anyone who has the
-    CLI installed and logged in, not only npm users.
-    """
-    override = os.environ.get("CLUELY_CLAUDE_CMD")
-    if override:
-        return override
-    found = shutil.which("claude") or shutil.which("claude.cmd")
-    if found:
-        return found
-    return str(Path(os.environ.get("APPDATA", "")) / "npm" / "claude.cmd")
-
-
-CLAUDE_CMD = _resolve_claude_cmd()
-CLAUDE_MODEL = os.environ.get("CLUELY_CLAUDE_MODEL", "")  # "" = account default
-# Voiced auto-answers run on a FAST model so they're near-instant; vision/typed
-# questions keep the stronger CLAUDE_MODEL. Set "" to use one shared session.
-AUTO_MODEL = os.environ.get("CLUELY_AUTO_MODEL", "haiku")
-# Hang recovery: if a turn produces no result within this many seconds, kill +
-# respawn the claude process so a stalled turn can't wedge the session lock.
-ANSWER_TIMEOUT_S = float(os.environ.get("CLUELY_ANSWER_TIMEOUT", "90"))
+# --- Gemini API (get a key at https://aistudio.google.com/apikey) ---
+# The key is read from this environment variable and never stored in the repo.
+API_KEY_ENV = "GEMINI_API_KEY"
+# Typed + vision (code) questions: the strongest Flash model. low / medium / high.
+# medium answered hard problems in a median 21s against high's 54s, and solved 5
+# of 6 to high's 6 of 6 (measured), so it's the default; high is one setting away.
+MODEL = os.environ.get("CLUELY_MODEL", "gemini-3.8-flash")
+THINKING = os.environ.get("CLUELY_THINKING", "medium")
+# Voiced auto-answers: the fastest model, so a spoken answer starts in about a
+# second. "" thinking = the model's own default. Set CLUELY_AUTO_MODEL="" to
+# answer voice on MODEL too.
+AUTO_MODEL = os.environ.get("CLUELY_AUTO_MODEL", "gemini-3.5-flash-lite") or MODEL
+AUTO_THINKING = os.environ.get("CLUELY_AUTO_THINKING", "")
+# Follow-ups ("explain line 4") see this many previous question/answer pairs.
+HISTORY_TURNS = int(os.environ.get("CLUELY_HISTORY_TURNS", "3"))
+# Seconds before a typed/vision turn is abandoned. It stays long so high still
+# works if you set it: at high, a hard problem sent nothing at all for 119-147s
+# before its first word (measured), and there is no way to tell that silence from
+# a dead connection.
+# Voiced answers get a short limit so a stall can't hold up the auto-answer queue.
+ANSWER_TIMEOUT_S = float(os.environ.get("CLUELY_ANSWER_TIMEOUT", "300"))
+AUTO_ANSWER_TIMEOUT_S = float(os.environ.get("CLUELY_AUTO_TIMEOUT", "30"))
 
 # --- Local transcription (faster-whisper) ---
 # CPU/base.en is the reliable default; set CLUELY_WHISPER_DEVICE=cuda for GPU.
@@ -85,6 +80,6 @@ HOTKEY_TOGGLE = "<ctrl>+<alt>+h"        # show / hide the overlay
 HOTKEY_ASK = "<ctrl>+<alt>+a"           # show + focus the question box
 HOTKEY_CLICKTHROUGH = "<ctrl>+<alt>+t"  # let the mouse pass through the panel
 HOTKEY_LIVE = "<ctrl>+<alt>+<space>"    # toggle live mode (listen + auto-answer)
-HOTKEY_VISION = "<ctrl>+<alt>+s"        # capture the screen and ask Claude about it
+HOTKEY_VISION = "<ctrl>+<alt>+s"        # capture the screen and ask Gemini about it
 HOTKEY_IMAGE = "<ctrl>+<alt>+i"         # attach an image (clipboard, else file picker)
 HOTKEY_QUIT = "<ctrl>+<alt>+q"          # save notes and exit
