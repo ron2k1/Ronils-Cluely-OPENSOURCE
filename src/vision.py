@@ -1,6 +1,6 @@
 """On-demand screen capture for vision queries.
 
-Grabs a monitor as a PNG (base64) so it can be sent to Claude as an image. We
+Grabs a monitor as a PNG (base64) so it can be sent to Gemini as an image. We
 use mss, which captures via GDI BitBlt — the same path that honors
 WDA_EXCLUDEFROMCAPTURE — so Cluely's own (capture-excluded) overlay does NOT
 appear in the shot. What you get is whatever is *behind* the panel: the Zoom

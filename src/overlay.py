@@ -231,7 +231,7 @@ class Overlay(QWidget):
         av.addWidget(self.chat, 1)
         inrow = QHBoxLayout()
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Ask Claude…  (Enter, or paste an image)")
+        self.input.setPlaceholderText("Ask Gemini…  (Enter, or paste an image)")
         self.input.returnPressed.connect(self.on_ask)
         self.btn_img = QPushButton("📎")
         self.btn_img.setFixedWidth(36)
@@ -511,24 +511,24 @@ class Overlay(QWidget):
         self.input.clear()
         self._convo.append(("you", q))
         self._render_chat()
-        self._start_worker(q, self._recent_transcript(), "claude")
+        self._start_worker(q, self._recent_transcript(), "ai")
 
     def _recent_transcript(self):
         return "\n".join(self._transcript_buf)[-4000:]
 
     def ask_screen(self):
-        """Capture the screen and ask Claude about it (on-demand vision)."""
+        """Capture the screen and ask Gemini about it (on-demand vision)."""
         try:
             from vision import grab_screen_b64
             img = grab_screen_b64(VISION_MONITOR)
         except Exception as exc:
             self._convo.append(("you", "🖥️ screen capture"))
-            self._convo.append(("claude", f"_(screen capture failed: {exc})_"))
+            self._convo.append(("ai", f"_(screen capture failed: {exc})_"))
             self._render_chat()
             return
         self._convo.append(("you", "🖥️ Sent my screen — solve / explain it"))
         self._render_chat()
-        self._start_worker(VISION_PROMPT, self._recent_transcript(), "claude", image_b64=img)
+        self._start_worker(VISION_PROMPT, self._recent_transcript(), "ai", image_b64=img)
 
     def attach_image(self):
         """Attach an image from the clipboard (preferred) or a file picker."""
@@ -557,7 +557,7 @@ class Overlay(QWidget):
         # Empty box on an image = treat it as a full solve (same structured restate +
         # solution + read-aloud as the Solve-screen path).
         question = q or VISION_PROMPT
-        self._start_worker(question, self._recent_transcript(), "claude", image_b64=b64)
+        self._start_worker(question, self._recent_transcript(), "ai", image_b64=b64)
 
     def eventFilter(self, obj, event):
         # Ctrl+V in the question box attaches a clipboard image instead of text.
@@ -613,7 +613,7 @@ class Overlay(QWidget):
             elif role == "auto":
                 out.append(f"**↳ Suggested:** {text}")
             else:
-                out.append(f"**Claude:** {text}")
+                out.append(f"**Gemini:** {text}")
         self.chat.setMarkdown("\n\n".join(out))
         bar = self.chat.verticalScrollBar()
         bar.setValue(bar.maximum())
